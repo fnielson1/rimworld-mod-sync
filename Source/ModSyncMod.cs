@@ -12,6 +12,9 @@ namespace ModSync
         public bool autoHost;
         public bool directWorkshop;
         public bool resumeAfterRestart; // set when we restart to load an updated Mod Sync
+        public string resumeRejoin = "";  // Multiplayer server to join once that resumed sync is done
+        public bool hostWithMultiplayer = true;
+        public bool syncOnMultiplayerJoin = true;
 
         public override void ExposeData()
         {
@@ -20,6 +23,9 @@ namespace ModSync
             Scribe_Values.Look(ref autoHost, "autoHost");
             Scribe_Values.Look(ref directWorkshop, "directWorkshop");
             Scribe_Values.Look(ref resumeAfterRestart, "resumeAfterRestart");
+            Scribe_Values.Look(ref resumeRejoin, "resumeRejoin", "");
+            Scribe_Values.Look(ref hostWithMultiplayer, "hostWithMultiplayer", true);
+            Scribe_Values.Look(ref syncOnMultiplayerJoin, "syncOnMultiplayerJoin", true);
         }
     }
 
@@ -34,7 +40,9 @@ namespace ModSync
         {
             Instance = this;
             Settings = GetSettings<ModSyncSettings>();
-            new Harmony("fnielson.modsync").PatchAll();
+            var harmony = new Harmony("fnielson.modsync");
+            harmony.PatchAll();
+            MultiplayerCompat.Init(harmony);
 
             if (Settings.autoHost)
                 LongEventHandler.ExecuteWhenFinished(() => SyncServer.Start(Settings.port));
@@ -77,6 +85,12 @@ namespace ModSync
                 "Useful if you're always the host: friends can sync any time the game is running.");
             list.CheckboxLabeled("Download Workshop mods from the host instead of subscribing", ref Settings.directWorkshop,
                 "For players without Steam. Workshop mods are copied as local mods and won't auto-update.");
+            list.GapLine();
+            list.Label(MultiplayerCompat.Active ? "Multiplayer" : "Multiplayer (not active)");
+            list.CheckboxLabeled("Host automatically while hosting a Multiplayer game", ref Settings.hostWithMultiplayer,
+                "Players joining get your mods from Mod Sync on your Multiplayer direct port (TCP) or the host port above.");
+            list.CheckboxLabeled("Sync automatically when joining a Multiplayer game with different mods", ref Settings.syncOnMultiplayerJoin,
+                "Opens Mod Sync with the server's address already filled in, and rejoins the server after the restart.");
             list.End();
         }
     }

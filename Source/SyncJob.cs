@@ -90,9 +90,19 @@ namespace ModSync
 
         private static string WorkDir => Path.Combine(GenFilePaths.SaveDataFolderPath, "ModSync");
 
-        public SyncJob(string address, bool directWorkshop)
+        /// <summary>Multiplayer server to join after the restart, as a Multiplayer connection string. Null outside Multiplayer.</summary>
+        public string Rejoin;
+
+        /// <summary>host:port, of the port that answered once connected.</summary>
+        public string Address => client.Address;
+
+        public SyncJob(string address, bool directWorkshop) : this(new SyncClient(address), directWorkshop)
         {
-            client = new SyncClient(address);
+        }
+
+        public SyncJob(SyncClient client, bool directWorkshop)
+        {
+            this.client = client;
             this.directWorkshop = directWorkshop || !SteamManager.Initialized;
             Background(() =>
             {

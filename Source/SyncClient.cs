@@ -9,11 +9,25 @@ namespace ModSync
     public class SyncClient
     {
         private readonly string host;
-        private readonly int port;
+        private readonly int[] fallbackPorts;
+        private int port;
+
+        public string Address => $"{host}:{port}";
 
         public SyncClient(string address)
         {
             ParseAddress(address, out host, out port);
+            fallbackPorts = new int[0];
+        }
+
+        /// <summary>Hello tries each port in order; the first that answers is used from then on.</summary>
+        public SyncClient(string host, params int[] ports)
+        {
+            if (string.IsNullOrEmpty(host) || ports.Length == 0)
+                throw new FormatException("Enter the host's address.");
+            this.host = host;
+            port = ports[0];
+            fallbackPorts = ports;
         }
 
         public static void ParseAddress(string address, out string host, out int port)
@@ -34,6 +48,27 @@ namespace ModSync
         }
 
         public HostInfo Hello()
+        {
+            if (fallbackPorts.Length <= 1)
+                return HelloOnce();
+            foreach (var candidate in fallbackPorts)
+            {
+                port = candidate;
+                try
+                {
+                    return HelloOnce();
+                }
+                catch (Exception ex) when (ex is IOException || ex is SocketException)
+                {
+                    if (candidate == fallbackPorts[fallbackPorts.Length - 1])
+                        throw new IOException($"Could not reach Mod Sync on {host} (tried TCP port {string.Join(", ", fallbackPorts)}). " +
+                                              "The host needs Mod Sync active, and players outside their network need one of those ports forwarded.");
+                }
+            }
+            throw new InvalidOperationException(); // unreachable
+        }
+
+        private HostInfo HelloOnce()
         {
             return Request(Protocol.CmdHello, null, (stream, r) => new HostInfo
             {

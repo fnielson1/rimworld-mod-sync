@@ -15,7 +15,8 @@ namespace ModSync
     public static class SyncServer
     {
         private static readonly object Lock = new object();
-        private static TcpListener listener;
+        private static readonly HashSet<int> ports = new HashSet<int>(); // wanted; opened once the manifest is ready
+        private static readonly Dictionary<int, TcpListener> listeners = new Dictionary<int, TcpListener>();
         private static Manifest manifest;
         private static Dictionary<string, string> servableFolders; // folder name -> full path
         private static HostInfo hostInfo;
@@ -32,11 +33,20 @@ namespace ModSync
         public static int RequestsServed => requestsServed;
 
         /// <summary>Must be called on the main thread: snapshots the mod list, then hashes and listens in the background.</summary>
-        public static void Start(int port)
+        public static void Start(params int[] wanted)
         {
             if (Running)
+            {
+                foreach (var port in wanted)
+                    Listen(port);
                 return;
+            }
             Running = true;
+            lock (Lock)
+            {
+                ports.Clear();
+                ports.UnionWith(wanted);
+            }
             SetStatus("Preparing mod list...");
 
             var snapshot = Snapshot();
@@ -65,21 +75,16 @@ namespace ModSync
                     m.Mods.AddRange(snapshot.Select(e => e.Mod));
                     m.Configs.AddRange(CollectConfigs(configDir, snapshot.Select(e => e.Mod.FolderName), ownFolder));
 
-                    var l = new TcpListener(IPAddress.Any, port);
-                    l.Start();
                     lock (Lock)
                     {
                         if (!Running) // stopped while we were hashing
-                        {
-                            l.Stop();
                             return;
-                        }
                         manifest = m;
                         servableFolders = folders;
-                        listener = l;
+                        foreach (var port in ports)
+                            Open(port);
+                        UpdateStatus();
                     }
-                    SetStatus($"Hosting on port {port}: {m.Mods.Count} mods, {m.Configs.Count} settings files");
-                    AcceptLoop(l);
                 }
                 catch (Exception ex)
                 {
@@ -94,17 +99,81 @@ namespace ModSync
             thread.Start();
         }
 
+        /// <summary>Also accept clients on this port. Returns false if it was already wanted. Doesn't start the server.</summary>
+        public static bool Listen(int port)
+        {
+            lock (Lock)
+            {
+                if (!Running || !ports.Add(port))
+                    return false;
+                if (manifest != null)
+                {
+                    Open(port);
+                    UpdateStatus();
+                }
+                return true;
+            }
+        }
+
+        /// <summary>Stops accepting clients on this port, leaving any other ports open.</summary>
+        public static void Unlisten(int port)
+        {
+            lock (Lock)
+            {
+                ports.Remove(port);
+                if (listeners.TryGetValue(port, out var l))
+                {
+                    l.Stop();
+                    listeners.Remove(port);
+                }
+                if (manifest != null)
+                    UpdateStatus();
+            }
+        }
+
         public static void Stop()
         {
             Running = false;
             lock (Lock)
             {
-                listener?.Stop();
-                listener = null;
+                foreach (var l in listeners.Values)
+                    l.Stop();
+                listeners.Clear();
+                ports.Clear();
                 manifest = null;
                 servableFolders = null;
             }
             SetStatus("Not hosting");
+        }
+
+        /// <summary>Under Lock. A port that can't be opened is logged and skipped so the other ports still work.</summary>
+        private static void Open(int port)
+        {
+            if (listeners.ContainsKey(port))
+                return;
+            try
+            {
+                var l = new TcpListener(IPAddress.Any, port);
+                l.Start();
+                listeners[port] = l;
+                new Thread(() => AcceptLoop(l)) { IsBackground = true, Name = "ModSync server " + port }.Start();
+            }
+            catch (SocketException ex)
+            {
+                Log.Warning($"[ModSync] Can't listen on TCP port {port}: {ex.Message}");
+            }
+        }
+
+        /// <summary>Under Lock, once the manifest is ready.</summary>
+        private static void UpdateStatus()
+        {
+            var open = listeners.Keys.OrderBy(p => p).ToList();
+            var failed = ports.Where(p => !listeners.ContainsKey(p)).OrderBy(p => p).ToList();
+            status = open.Count == 0
+                ? (failed.Count > 0 ? $"Error: can't open TCP port {string.Join(", ", failed)}. Is something else using it?" : "Not accepting connections")
+                : $"Hosting on port {string.Join(", ", open)}: {manifest.Mods.Count} mods, {manifest.Configs.Count} settings files";
+            if (open.Count > 0 && failed.Count > 0)
+                status += $" (port {string.Join(", ", failed)} unavailable)";
         }
 
         private class SnapshotEntry

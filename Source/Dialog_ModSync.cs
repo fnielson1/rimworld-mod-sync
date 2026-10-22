@@ -26,9 +26,29 @@ namespace ModSync
             absorbInputAroundWindow = true;
             closeOnClickedOutside = false;
             localAddresses = GetLocalAddresses();
-            if (autoCheck && !ModSyncMod.Settings.lastAddress.NullOrEmpty())
-                Connect(ModSyncMod.Settings);
+            var settings = ModSyncMod.Settings;
+            if (autoCheck && !settings.lastAddress.NullOrEmpty())
+            {
+                Connect(settings);
+                if (job != null)
+                    job.Rejoin = settings.resumeRejoin.NullOrEmpty() ? null : settings.resumeRejoin;
+            }
+            settings.resumeRejoin = "";
         }
+
+        /// <summary>Shows the dialog running this job, unless one is already busy syncing.</summary>
+        public static void Open(SyncJob newJob)
+        {
+            if (!IsBusy)
+            {
+                job = newJob;
+                ModSyncMod.Settings.lastAddress = newJob.Address;
+            }
+            if (Find.WindowStack.WindowOfType<Dialog_ModSync>() == null)
+                Find.WindowStack.Add(new Dialog_ModSync(autoCheck: false));
+        }
+
+        private static bool IsBusy => job != null && (job.Phase == JobPhase.Syncing || job.Phase == JobPhase.WaitingForSteam || job.Phase == JobPhase.UpdatingSelf);
 
         public override void PostClose()
         {
@@ -72,7 +92,7 @@ namespace ModSync
             // ---- Client ----
             Widgets.Label(new Rect(inRect.x, y, inRect.width, 24f), "<b>Join</b> - copy the host's mods, load order and mod settings");
             y += 28f;
-            bool busy = job != null && (job.Phase == JobPhase.Syncing || job.Phase == JobPhase.WaitingForSteam || job.Phase == JobPhase.UpdatingSelf);
+            bool busy = IsBusy;
             Widgets.Label(new Rect(inRect.x, y + 5f, 110f, 24f), "Host address:");
             var fieldRect = new Rect(inRect.x + 110f, y, 300f, 32f);
             if (busy)
@@ -142,8 +162,11 @@ namespace ModSync
                         job.SkipSteamWait();
                     break;
                 case JobPhase.Finished:
-                    if (Widgets.ButtonText(buttonRect, "Restart now"))
+                    if (Widgets.ButtonText(buttonRect, job.Rejoin != null ? "Restart and rejoin" : "Restart now"))
+                    {
+                        MultiplayerCompat.RejoinAfterRestart(job.Rejoin);
                         GenCommandLine.Restart();
+                    }
                     break;
                 case JobPhase.SelfUpdated:
                     if (Widgets.ButtonText(buttonRect, "Restart and continue"))
@@ -206,6 +229,8 @@ namespace ModSync
         private static void ResumeAfterRestart()
         {
             ModSyncMod.Settings.resumeAfterRestart = true;
+            ModSyncMod.Settings.lastAddress = job.Address;
+            ModSyncMod.Settings.resumeRejoin = job.Rejoin ?? "";
             ModSyncMod.Instance.WriteSettings();
         }
 
