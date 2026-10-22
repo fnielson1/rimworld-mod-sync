@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ModMetaData>
+  <name>Mod Sync</name>
+  <author>fnielson</author>
+  <packageId>fnielson.modsync</packageId>
+  <!-- Bump on every Workshop release: clients compare this against the host's to decide whether to update. -->
+  <modVersion>1.0.0</modVersion>
+  <supportedVersions>
+    <li>1.6</li>
+  </supportedVersions>
+  <modDependencies>
+    <li>
+      <packageId>brrainz.harmony</packageId>
+      <displayName>Harmony</displayName>
+      <steamWorkshopUrl>steam://url/CommunityFilePage/2009463077</steamWorkshopUrl>
+      <downloadUrl>https://github.com/pardeike/HarmonyRimWorld/releases/latest</downloadUrl>
+    </li>
+  </modDependencies>
+  <loadAfter>
+    <li>brrainz.harmony</li>
+  </loadAfter>
+  <description>Sync your active mods, load order and mod settings from a host's game to yours.
+
+The host clicks "Mod Sync" on the main menu and starts hosting. Clients enter the host's address and click Sync: Workshop mods are subscribed through Steam, local mods are downloaded directly from the host, the mod list and mod settings are copied, and the game restarts.
+
+Only sync from hosts you trust - you are downloading and running their mods.</description>
+</ModMetaData>
