@@ -27,7 +27,7 @@ Anything replaced is backed up first, to `%USERPROFILE%\AppData\LocalLow\Ludeon 
 
 ## Build
 
-Requires the .NET SDK and RimWorld + Harmony (Workshop) installed.
+Requires the .NET SDK. RimWorld and Harmony are referenced through NuGet packages, so the game doesn't need to be installed to build.
 
 ```
 cd Source
@@ -35,7 +35,9 @@ dotnet build -c Release                  # outputs 1.6/Assemblies/ModSync.dll
 dotnet build -c Release -p:Deploy=true   # also copies the mod into RimWorld/Mods/ModSync
 ```
 
-Use `-p:RimWorldDir="D:\SteamLibrary\steamapps\common\RimWorld"` if the game isn't in the default Steam location.
+Use `-p:RimWorldDir="D:\SteamLibrary\steamapps\common\RimWorld"` with `Deploy` if the game isn't in the default Steam location.
+
+The built DLL isn't committed. GitHub Actions builds every push to `main` and every pull request, and uploads the ready-to-install mod folder as the `ModSync` artifact on the run.
 
 ## Releasing an update
 
