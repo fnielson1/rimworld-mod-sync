@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using HarmonyLib;
@@ -8,13 +9,28 @@ using Verse;
 namespace ModSync
 {
     /// <summary>
+    /// The server's mods as Multiplayer received them on join. Enough to sync Workshop mods, the load order and
+    /// (through Multiplayer) mod settings without reaching the host's Mod Sync. Mods have no hashes or sizes.
+    /// </summary>
+    public class MultiplayerHostData
+    {
+        public Manifest Manifest; // Configs left empty: Multiplayer applies its own copy of the host's settings
+        public bool HasConfigs;   // whether the host sends its mod settings through Multiplayer
+        public int ConfigCount;
+
+        /// <summary>Package ids whose assemblies, Defs or Patches differ from ours, or that we don't have.</summary>
+        public HashSet<string> Differs = new HashSet<string>();
+    }
+
+    /// <summary>
     /// Optional integration with the Multiplayer mod. Its methods are patched by name at runtime,
     /// so Mod Sync needs Multiplayer neither to build nor to run.
     ///
     /// Host: Mod Sync hosts while a Multiplayer server runs, on Multiplayer's direct ports (as TCP) and our own port,
     /// and over Steam when the server accepts Steam joins.
     /// Client: when Multiplayer reports a mod mismatch on join, Mod Sync opens on that server's address,
-    /// and the restart rejoins the server.
+    /// and the restart rejoins the server. The plan starts from the mod list Multiplayer received, so the host's
+    /// Mod Sync is only needed for local mods, a different Mod Sync version, or mod settings Multiplayer doesn't send.
     /// </summary>
     public static class MultiplayerCompat
     {
@@ -203,14 +219,77 @@ namespace ModSync
                     return;
                 }
 
+                // Don't keep the player waiting long on a host whose Mod Sync port isn't open: Multiplayer's data may be all we need.
+                client.ConnectTimeout = TimeSpan.FromSeconds(4);
+                var hostData = ReadHostData(remote);
+
                 Log.Message($"[ModSync] Mods differ from the Multiplayer server; syncing from {client.Address}");
-                var job = new SyncJob(client, ModSyncMod.Settings.directWorkshop) { Rejoin = connection };
+                var job = new SyncJob(client, ModSyncMod.Settings.directWorkshop, hostData) { Rejoin = connection };
                 pendingRemote = remote;
                 Dialog_ModSync.Open(job);
             }
             catch (Exception ex)
             {
                 Log.Error("[ModSync] Couldn't start syncing with the Multiplayer server: " + ex);
+            }
+        }
+
+        /// <summary>
+        /// What Multiplayer received from the server on join: its mods in load order, and hashes of each mod's
+        /// assemblies, Defs and Patches, which we compare with ours. Null if Multiplayer's data couldn't be read.
+        /// </summary>
+        private static MultiplayerHostData ReadHostData(object remote)
+        {
+            try
+            {
+                var r = Traverse.Create(remote);
+                var data = new MultiplayerHostData
+                {
+                    Manifest = new Manifest { GameVersion = r.Field("remoteRwVersion").GetValue<string>() },
+                    HasConfigs = r.Field("hasConfigs").GetValue<bool>(),
+                    ConfigCount = ((ICollection)r.Field("remoteModConfigs").GetValue()).Count,
+                };
+                foreach (var info in (IEnumerable)r.Field("remoteMods").GetValue())
+                {
+                    var mod = Traverse.Create(info);
+                    var id = mod.Field("packageId").GetValue<string>();
+                    var source = mod.Field("source").GetValue<ContentSource>();
+                    ulong steamId = mod.Field("steamId").GetValue<ulong>();
+                    var kind = source == ContentSource.OfficialModsFolder ? ModKind.Official
+                        : source == ContentSource.SteamWorkshop && steamId != 0 ? ModKind.Workshop
+                        : ModKind.Local;
+                    data.Manifest.Mods.Add(new ManifestMod
+                    {
+                        PackageId = id,
+                        PackageIdNonUnique = id,
+                        Name = mod.Field("name").GetValue<string>(),
+                        Kind = kind,
+                        WorkshopId = kind == ModKind.Workshop ? steamId : 0,
+                        FolderName = id, // the host's folder name isn't sent; SyncJob uses the local copy's
+                    });
+                }
+
+                // Multiplayer's own snapshot of our files is from startup; hash them now, as they are on disk.
+                var ids = data.Manifest.Mods.Select(m => m.PackageIdNonUnique).ToList();
+                var getModFiles = AccessTools.Method("Multiplayer.Client.JoinData:GetModFiles");
+                var localFiles = getModFiles.Invoke(null, new object[] { ids });
+                var remoteFiles = r.Field("remoteFiles").GetValue();
+                var copyWithMods = AccessTools.Method(remoteFiles.GetType(), "CopyWithMods");
+                var dictsEqual = AccessTools.Method(remoteFiles.GetType(), "DictsEqual");
+                foreach (var id in ids)
+                {
+                    var only = new object[] { new[] { id } };
+                    var theirs = copyWithMods.Invoke(remoteFiles, only);
+                    var ours = copyWithMods.Invoke(localFiles, only);
+                    if (!(bool)dictsEqual.Invoke(theirs, new[] { ours }))
+                        data.Differs.Add(id);
+                }
+                return data;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning("[ModSync] Couldn't read the mod list Multiplayer received, so syncing needs the host's Mod Sync: " + ex);
+                return null;
             }
         }
 

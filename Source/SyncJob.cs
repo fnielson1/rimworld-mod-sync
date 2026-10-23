@@ -20,6 +20,8 @@ namespace ModSync
         Download,
         Replace,
         MissingDlc,
+        SteamUpdate,  // installed from the Workshop, but Multiplayer says it differs from the host's
+        Unavailable,  // only the host's Mod Sync could provide it, and that isn't available
     }
 
     public enum ItemState
@@ -62,6 +64,12 @@ namespace ModSync
     {
         private readonly SyncClient client;
         private readonly bool directWorkshop;
+        private bool subscribeWorkshop; // Workshop mods come through Steam rather than from the host
+        private readonly MultiplayerHostData multiplayer;
+        private bool fromMultiplayer;   // planning from what Multiplayer received instead of the host's Mod Sync
+
+        /// <summary>Whether the plan comes from Multiplayer's data, the host's Mod Sync not being needed or not answering.</summary>
+        public bool FromMultiplayer => fromMultiplayer;
         private readonly ConcurrentQueue<Action> mainThread = new ConcurrentQueue<Action>();
         private int steamPollTick;
 
@@ -71,7 +79,11 @@ namespace ModSync
         public List<PlanItem> Items { get; } = new List<PlanItem>();
         public List<string> Warnings { get; } = new List<string>();
 
-        public bool HasChanges => Items.Any(i => i.Action == ItemAction.Subscribe || IsFromHost(i));
+        public bool HasChanges => Items.Any(i => i.Action == ItemAction.Subscribe || i.Action == ItemAction.SteamUpdate || IsFromHost(i));
+
+        public string SettingsSummary => !fromMultiplayer ? $"{Manifest?.Configs.Count ?? 0} mod settings files will be copied."
+            : multiplayer.HasConfigs ? $"Multiplayer applies the host's {multiplayer.ConfigCount} mod settings files when you rejoin."
+            : "Mod settings won't be copied.";
 
         /// <summary>
         /// Mods copied straight from the host can't be verified the way Workshop items can, so they're
@@ -100,15 +112,64 @@ namespace ModSync
         {
         }
 
-        public SyncJob(SyncClient client, bool directWorkshop)
+        /// <summary>
+        /// With Multiplayer's data about the host, the host's Mod Sync is only contacted for what that data can't provide
+        /// (local mods, a different Mod Sync, mod settings), and the sync falls back to that data if it can't be reached.
+        /// </summary>
+        public SyncJob(SyncClient client, bool directWorkshop, MultiplayerHostData multiplayer = null)
         {
             this.client = client;
             this.directWorkshop = directWorkshop || !SteamManager.Initialized;
+            subscribeWorkshop = !this.directWorkshop;
+            this.multiplayer = multiplayer;
+            if (multiplayer != null && !NeedsHost(multiplayer))
+            {
+                mainThread.Enqueue(() => PlanFromMultiplayer(null));
+                return;
+            }
             Background(() =>
             {
-                var info = client.Hello();
+                HostInfo info;
+                try
+                {
+                    info = client.Hello();
+                }
+                catch (Exception ex) when (multiplayer != null && (ex is IOException || ex is SocketException))
+                {
+                    mainThread.Enqueue(() => PlanFromMultiplayer("Syncing from what Multiplayer received, without the host's Mod Sync. " + ex.Message));
+                    return;
+                }
                 mainThread.Enqueue(() => CheckHostVersion(info));
             });
+        }
+
+        /// <summary>Whether something the host has can only come from its Mod Sync, Multiplayer's data not being enough.</summary>
+        private bool NeedsHost(MultiplayerHostData data)
+        {
+            var ownId = ModSyncMod.Instance.Content.ModMetaData.PackageIdNonUnique;
+            if (!data.Manifest.Mods.Any(m => m.PackageIdNonUnique == ownId))
+                return false; // the host doesn't run Mod Sync, so there's nothing to ask
+            if (data.Differs.Contains(ownId) || !data.HasConfigs)
+                return true; // a different Mod Sync to update to, or mod settings Multiplayer doesn't send
+            var installed = ModLister.AllInstalledMods.ToList();
+            return data.Manifest.Mods.Any(mod =>
+                (mod.Kind == ModKind.Local || (mod.Kind == ModKind.Workshop && directWorkshop))
+                && (LocalCopy(installed, mod) == null || data.Differs.Contains(mod.PackageIdNonUnique)));
+        }
+
+        /// <summary>Main thread. Plans from Multiplayer's data; the reason is shown when the host's Mod Sync was wanted but not used.</summary>
+        private void PlanFromMultiplayer(string reason)
+        {
+            fromMultiplayer = true;
+            subscribeWorkshop = SteamManager.Initialized;
+            if (reason != null)
+                Warnings.Add(reason);
+            var ownId = ModSyncMod.Instance.Content.ModMetaData.PackageIdNonUnique;
+            if (!multiplayer.Manifest.Mods.Any(m => m.PackageIdNonUnique == ownId))
+                Warnings.Add("The host doesn't run Mod Sync, so it will be turned off for you too, to match the host's mod list.");
+            if (!multiplayer.HasConfigs)
+                Warnings.Add("The host's mod settings won't be copied: the host doesn't share them through Multiplayer.");
+            BuildPlan(multiplayer.Manifest);
         }
 
         /// <summary>Call every frame from the UI.</summary>
@@ -142,6 +203,11 @@ namespace ModSync
             if (hostNewer)
             {
                 StartSelfUpdate(host, own);
+                return;
+            }
+            if (host.ProtocolVersion != Protocol.Version && multiplayer != null)
+            {
+                PlanFromMultiplayer($"The host's Mod Sync (v{host.ModVersion}) can't talk to yours (v{own.ModVersion}), so syncing from what Multiplayer received.");
                 return;
             }
             if (host.ProtocolVersion != Protocol.Version)
@@ -232,10 +298,11 @@ namespace ModSync
 
             if (manifest.GameVersion != VersionControl.CurrentVersionString)
                 Warnings.Add($"Host runs RimWorld {manifest.GameVersion}, you run {VersionControl.CurrentVersionString}.");
-            if (directWorkshop && !SteamManager.Initialized)
+            if (directWorkshop && !SteamManager.Initialized && !fromMultiplayer)
                 Warnings.Add("Steam is not running, so Workshop mods will be downloaded from the host instead.");
 
             var ownPackageId = ModSyncMod.Instance.Content.PackageId;
+            var ownPackageIdNonUnique = ModSyncMod.Instance.Content.ModMetaData.PackageIdNonUnique;
             var installed = ModLister.AllInstalledMods.ToList();
             var toHash = new List<PlanItem>();
 
@@ -244,8 +311,13 @@ namespace ModSync
                 var item = new PlanItem { Mod = mod, Action = ItemAction.UpToDate };
                 Items.Add(item);
 
-                if (mod.PackageIdNonUnique == ownPackageId)
+                if (mod.PackageIdNonUnique == ownPackageId || mod.PackageIdNonUnique == ownPackageIdNonUnique)
+                {
+                    if (fromMultiplayer && multiplayer.Differs.Contains(mod.PackageIdNonUnique))
+                        Warnings.Add("The host runs a different version of Mod Sync, and yours couldn't be updated from it. " +
+                                     "Multiplayer will keep reporting different mods until you both run the same version.");
                     continue; // never overwrite ourselves while running
+                }
 
                 if (mod.Kind == ModKind.Official)
                 {
@@ -257,17 +329,30 @@ namespace ModSync
                     continue;
                 }
 
-                if (mod.Kind == ModKind.Workshop && !directWorkshop)
+                if (mod.Kind == ModKind.Workshop && subscribeWorkshop)
                 {
                     bool have = installed.Any(m => m.Source == ContentSource.SteamWorkshop && m.GetPublishedFileId().m_PublishedFileId == mod.WorkshopId);
                     if (!have)
                         item.Action = ItemAction.Subscribe;
+                    else if (fromMultiplayer && multiplayer.Differs.Contains(mod.PackageIdNonUnique))
+                        item.Action = ItemAction.SteamUpdate;
                     continue;
                 }
 
                 // Transferred directly: compare against our local copy, if any.
-                var existing = installed.FirstOrDefault(m => m.Source == ContentSource.ModsFolder && m.FolderName == mod.FolderName)
-                    ?? installed.FirstOrDefault(m => m.Source == ContentSource.ModsFolder && m.PackageIdNonUnique == mod.PackageIdNonUnique);
+                var existing = LocalCopy(installed, mod);
+                if (fromMultiplayer)
+                {
+                    // Multiplayer doesn't send the host's folder name; the mod list and settings follow our copy's.
+                    if (existing != null)
+                    {
+                        mod.FolderName = existing.FolderName;
+                        item.ExistingDir = existing.RootDir.FullName;
+                    }
+                    if (existing == null || multiplayer.Differs.Contains(mod.PackageIdNonUnique))
+                        item.Action = ItemAction.Unavailable;
+                    continue;
+                }
                 if (existing == null)
                 {
                     item.Action = ItemAction.Download;
@@ -279,6 +364,9 @@ namespace ModSync
                     toHash.Add(item);
                 }
             }
+
+            if (fromMultiplayer && directWorkshop && subscribeWorkshop && Items.Any(i => i.Action == ItemAction.Subscribe || i.Action == ItemAction.SteamUpdate))
+                Warnings.Add("Workshop mods will come through Steam, since they can't be downloaded from the host's Mod Sync.");
 
             Background(() =>
             {
@@ -292,7 +380,11 @@ namespace ModSync
                 mainThread.Enqueue(() =>
                 {
                     Phase = JobPhase.Ready;
-                    Message = HasChanges ? "Ready to sync." : "All mods already match the host. Syncing will apply the mod list and settings.";
+                    Message = HasChanges ? "Ready to sync."
+                        : Items.Any(i => i.Action == ItemAction.Unavailable) ? "Nothing that can be synced differs. Syncing will apply the mod list and settings."
+                        : "All mods already match the host. Syncing will apply the mod list and settings.";
+                    if (fromMultiplayer)
+                        Message += " Using the mod list Multiplayer received from the server.";
                 });
             });
         }
@@ -312,6 +404,17 @@ namespace ModSync
                 SteamUGC.SubscribeItem(new PublishedFileId_t(item.Mod.WorkshopId));
                 item.State = ItemState.Working;
                 item.Detail = "Subscribed, waiting for Steam";
+            }
+            foreach (var item in Items.Where(i => i.Action == ItemAction.SteamUpdate))
+            {
+                SteamUGC.DownloadItem(new PublishedFileId_t(item.Mod.WorkshopId), true);
+                item.State = ItemState.Working;
+                item.Detail = "Updating through Steam";
+            }
+            foreach (var item in Items.Where(i => i.Action == ItemAction.Unavailable))
+            {
+                item.State = ItemState.Skipped;
+                item.Detail = item.ExistingDir != null ? "Kept your own copy, which differs" : "Skipped: needs the host's Mod Sync";
             }
 
             var transfers = Items.Where(IsFromHost).ToList();
@@ -403,7 +506,7 @@ namespace ModSync
         private void PollSteam()
         {
             var waiting = 0;
-            foreach (var item in Items.Where(i => i.Action == ItemAction.Subscribe && i.State == ItemState.Working))
+            foreach (var item in Items.Where(i => (i.Action == ItemAction.Subscribe || i.Action == ItemAction.SteamUpdate) && i.State == ItemState.Working))
             {
                 var id = new PublishedFileId_t(item.Mod.WorkshopId);
                 var state = (EItemState)SteamUGC.GetItemState(id);
@@ -450,7 +553,7 @@ namespace ModSync
                 ModMetaData match;
                 if (mod.Kind == ModKind.Official || mod.PackageIdNonUnique == ModSyncMod.Instance.Content.PackageId)
                     match = ModLister.GetModWithIdentifier(mod.PackageIdNonUnique, ignorePostfix: true);
-                else if (mod.Kind == ModKind.Workshop && !directWorkshop)
+                else if (mod.Kind == ModKind.Workshop && subscribeWorkshop)
                     match = installed.FirstOrDefault(m => m.Source == ContentSource.SteamWorkshop && m.GetPublishedFileId().m_PublishedFileId == mod.WorkshopId);
                 else
                     match = installed.FirstOrDefault(m => m.Source == ContentSource.ModsFolder && m.FolderName == mod.FolderName);
@@ -472,6 +575,13 @@ namespace ModSync
         }
 
         // ---------- Helpers ----------
+
+        /// <summary>Our copy of a mod that's transferred directly rather than through Steam: same folder name, else same package id.</summary>
+        private static ModMetaData LocalCopy(List<ModMetaData> installed, ManifestMod mod)
+        {
+            return installed.FirstOrDefault(m => m.Source == ContentSource.ModsFolder && m.FolderName == mod.FolderName)
+                ?? installed.FirstOrDefault(m => m.Source == ContentSource.ModsFolder && m.PackageIdNonUnique == mod.PackageIdNonUnique);
+        }
 
         private void Background(Action work)
         {

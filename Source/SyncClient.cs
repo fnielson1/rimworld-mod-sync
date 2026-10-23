@@ -15,6 +15,9 @@ namespace ModSync
 
         public string Address => steamId != 0 ? SteamTransport.AddressPrefix + steamId : $"{host}:{port}";
 
+        /// <summary>How long to wait for each TCP port to answer.</summary>
+        public TimeSpan ConnectTimeout = TimeSpan.FromSeconds(10);
+
         public SyncClient(string address)
         {
             fallbackPorts = new int[0];
@@ -123,7 +126,7 @@ namespace ModSync
             try
             {
                 var connect = client.BeginConnect(host, port, null, null);
-                if (!connect.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(10)))
+                if (!connect.AsyncWaitHandle.WaitOne(ConnectTimeout))
                     throw new IOException($"Could not reach {host}:{port}. Is the host hosting, and is the port open?");
                 client.EndConnect(connect);
                 client.ReceiveTimeout = 60000;

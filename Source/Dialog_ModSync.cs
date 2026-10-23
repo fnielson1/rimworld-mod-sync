@@ -62,7 +62,7 @@ namespace ModSync
             var settings = ModSyncMod.Settings;
 
             // A job started by Multiplayer may have fallen back to another port; show the one that answered.
-            if (job != null && job != addressShownFor && job.Rejoin != null && job.Phase != JobPhase.Connecting && job.Phase != JobPhase.Failed)
+            if (job != null && job != addressShownFor && job.Rejoin != null && !job.FromMultiplayer && job.Phase != JobPhase.Connecting && job.Phase != JobPhase.Failed)
             {
                 settings.lastAddress = job.Address;
                 addressShownFor = job;
@@ -229,7 +229,7 @@ namespace ModSync
                 rowY += rowHeight;
             }
             GUI.color = Color.gray;
-            Widgets.Label(new Rect(4f, rowY + 3f, viewRect.width, rowHeight), $"{upToDate} of {job.Items.Count} mods already match the host. {job.Manifest?.Configs.Count ?? 0} mod settings files will be copied.");
+            Widgets.Label(new Rect(4f, rowY + 3f, viewRect.width, rowHeight), $"{upToDate} of {job.Items.Count} mods already match the host. {job.SettingsSummary}");
             GUI.color = Color.white;
             Widgets.EndScrollView();
         }
@@ -292,6 +292,8 @@ namespace ModSync
                 case ItemAction.Download: return $"Download from host ({FormatSize(item.Mod.Size)})";
                 case ItemAction.Replace: return $"Update from host ({FormatSize(item.Mod.Size)})";
                 case ItemAction.MissingDlc: return "DLC not owned - skipped";
+                case ItemAction.SteamUpdate: return "Differs from host - update through Steam";
+                case ItemAction.Unavailable: return item.ExistingDir != null ? "Differs - needs the host's Mod Sync" : "Missing - needs the host's Mod Sync";
                 default: return "Up to date";
             }
         }
