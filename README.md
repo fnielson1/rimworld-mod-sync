@@ -41,6 +41,24 @@ Use `-p:RimWorldDir="D:\SteamLibrary\steamapps\common\RimWorld"` with `Deploy` i
 
 The built DLL isn't committed. GitHub Actions builds every push to `main` and every pull request, and uploads the ready-to-install mod folder as the `ModSync` artifact on the run.
 
+## Testing with Multiplayer on one PC
+
+The scripts in `tools/` (PowerShell, Windows) run a Host and a Client copy of RimWorld side by side, outside Steam:
+
+```
+tools\Start-TwoInstances.ps1            # build, deploy, start both
+tools\Start-TwoInstances.ps1 -NoBuild   # start both with the deployed build
+tools\Start-TwoInstances.ps1 -Reset     # start over from your current config
+```
+
+Each copy gets its own save data folder under `%USERPROFILE%\RimWorldTest`, copied from your real one, which is left alone. The Client runs from `RimWorldTest\ClientGame`, a second game folder whose large data folders are links to your install, so it has its own empty `Mods` folder. A small empty local mod, `Mod Sync Test`, is put in your real `Mods` folder and turned on for the Host only, so joining downloads it from the host. The first Client launch triggers a Windows Firewall prompt for that copy; allow it on private networks for LAN joins.
+
+Then host the Host's game through Multiplayer and join `127.0.0.1` from the Client. The logs are `Player.log` in each save data folder.
+
+`Capture-RimWorld.ps1` screenshots both game windows (and only them), and `Send-RimWorld.ps1 -Which Host -Click 892,257` clicks or types in one, using screenshot coordinates. It moves the real mouse.
+
+Joining through Steam can't be tested this way, because both copies use the same Steam account.
+
 ## Releasing an update
 
 1. Bump `<modVersion>` in `About/About.xml`. Clients only update when the host's version is higher.
@@ -53,6 +71,7 @@ The built DLL isn't committed. GitHub Actions builds every push to `main` and ev
 - `Source/SyncJob.cs`: client workflow. Plans the changes, downloads, subscribes, waits for Steam, and writes the mod list.
 - `Source/SyncClient.cs`, `Manifest.cs`: wire protocol (one request per connection, binary).
 - `Source/SteamTransport.cs`: the same requests over Steam peer-to-peer, for Multiplayer games joined through Steam.
+- `tools/`: scripts for testing two RimWorld copies on one PC.
 - `Source/ModFolder.cs`: folder hashing and gzip pack/unpack.
 - `Source/Dialog_ModSync.cs`, `ModSyncMod.cs`: UI, settings, main menu button.
 - `Source/MultiplayerCompat.cs`: optional Multiplayer integration, patched by name at runtime so Multiplayer isn't needed to build or run.
