@@ -12,6 +12,7 @@ namespace ModSync
     {
         // Kept across openings so closing the dialog mid-sync doesn't lose progress.
         private static SyncJob job;
+        private static SyncJob addressShownFor;
 
         private readonly string localAddresses;
         private Vector2 scroll;
@@ -59,6 +60,13 @@ namespace ModSync
         {
             job?.Tick();
             var settings = ModSyncMod.Settings;
+
+            // A job started by Multiplayer may have fallen back to another port; show the one that answered.
+            if (job != null && job != addressShownFor && job.Rejoin != null && job.Phase != JobPhase.Connecting && job.Phase != JobPhase.Failed)
+            {
+                settings.lastAddress = job.Address;
+                addressShownFor = job;
+            }
 
             Text.Font = GameFont.Medium;
             Widgets.Label(new Rect(inRect.x, inRect.y, inRect.width, 35f), "Mod Sync");
