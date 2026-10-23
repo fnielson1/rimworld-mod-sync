@@ -11,7 +11,8 @@ namespace ModSync
     /// Optional integration with the Multiplayer mod. Its methods are patched by name at runtime,
     /// so Mod Sync needs Multiplayer neither to build nor to run.
     ///
-    /// Host: Mod Sync hosts while a Multiplayer server runs, on Multiplayer's direct ports (as TCP) and our own port.
+    /// Host: Mod Sync hosts while a Multiplayer server runs, on Multiplayer's direct ports (as TCP) and our own port,
+    /// and over Steam when the server accepts Steam joins.
     /// Client: when Multiplayer reports a mod mismatch on join, Mod Sync opens on that server's address,
     /// and the restart rejoins the server.
     /// </summary>
@@ -118,6 +119,7 @@ namespace ModSync
                 if (!ModSyncMod.Settings.hostWithMultiplayer)
                     return;
                 var settings = Traverse.Create(LocalServer).Field("settings");
+                bool steam = settings.Field("steam").GetValue<bool>();
                 var ports = new List<int> { ModSyncMod.Settings.port };
                 if (settings.Field("direct").GetValue<bool>())
                     ports.AddRange(DirectPorts(settings.Field("directAddress").GetValue<string>()));
@@ -135,6 +137,8 @@ namespace ModSync
                     }
                     else
                         addedPorts.AddRange(ports.Where(SyncServer.Listen));
+                    if (steam)
+                        SteamTransport.StartServing();
                 });
             }
             catch (Exception ex)
@@ -145,7 +149,10 @@ namespace ModSync
 
         private static void StoppingMultiplayer()
         {
-            if (LocalServer == null || addedPorts.Count == 0)
+            if (LocalServer == null)
+                return;
+            SteamTransport.StopServing();
+            if (addedPorts.Count == 0)
                 return;
             if (startedServer)
                 SyncServer.Stop();
@@ -185,15 +192,19 @@ namespace ModSync
                 if (connection.NullOrEmpty())
                     return;
 
-                if (!TryParseLiteNet(connection, out string host, out int port))
+                SyncClient client;
+                if (SteamTransport.TryParseAddress(connection, out _))
+                    client = new SyncClient(connection); // over the Steam session Multiplayer already opened
+                else if (TryParseLiteNet(connection, out string host, out int port))
+                    client = new SyncClient(host, new[] { port, ModSyncMod.Settings.port }.Distinct().ToArray());
+                else
                 {
-                    Messages.Message("Mod Sync can't sync from servers joined through Steam yet. Use Multiplayer's own fix, " +
-                                     "or Mod Sync on the main menu with the host's address.", MessageTypeDefOf.RejectInput, historical: false);
+                    Log.Warning("[ModSync] Unknown Multiplayer connection, not syncing: " + connection);
                     return;
                 }
 
-                var ports = new[] { port, ModSyncMod.Settings.port }.Distinct().ToArray();
-                var job = new SyncJob(new SyncClient(host, ports), ModSyncMod.Settings.directWorkshop) { Rejoin = connection };
+                Log.Message($"[ModSync] Mods differ from the Multiplayer server; syncing from {client.Address}");
+                var job = new SyncJob(client, ModSyncMod.Settings.directWorkshop) { Rejoin = connection };
                 pendingRemote = remote;
                 Dialog_ModSync.Open(job);
             }

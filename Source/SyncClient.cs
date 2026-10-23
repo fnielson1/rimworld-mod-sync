@@ -5,19 +5,21 @@ using System.Text;
 
 namespace ModSync
 {
-    /// <summary>Blocking network calls to a host. Safe to use from background threads.</summary>
+    /// <summary>Blocking network calls to a host, over TCP or Steam. Safe to use from background threads.</summary>
     public class SyncClient
     {
         private readonly string host;
         private readonly int[] fallbackPorts;
         private int port;
+        private readonly ulong steamId; // set for "steam:<id>" addresses: talk to the host over Steam instead of TCP
 
-        public string Address => $"{host}:{port}";
+        public string Address => steamId != 0 ? SteamTransport.AddressPrefix + steamId : $"{host}:{port}";
 
         public SyncClient(string address)
         {
-            ParseAddress(address, out host, out port);
             fallbackPorts = new int[0];
+            if (!SteamTransport.TryParseAddress(address, out steamId))
+                ParseAddress(address, out host, out port);
         }
 
         /// <summary>Hello tries each port in order; the first that answers is used from then on.</summary>
@@ -94,29 +96,43 @@ namespace ModSync
 
         private T Request<T>(byte cmd, string arg, Func<Stream, BinaryReader, T> readPayload)
         {
-            using (var client = new TcpClient())
+            using (var stream = new BufferedStream(Open(), 65536))
+            using (var w = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
+            using (var r = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true))
+            {
+                w.Write(Protocol.Magic);
+                w.Write(Protocol.Version);
+                w.Write(cmd);
+                if (arg != null)
+                    w.Write(arg);
+                w.Flush();
+
+                if (r.ReadByte() != Protocol.StatusOk)
+                    throw new IOException("Host refused: " + r.ReadString());
+                return readPayload(stream, r);
+            }
+        }
+
+        /// <summary>A new connection for one request; disposing the stream closes it.</summary>
+        private Stream Open()
+        {
+            if (steamId != 0)
+                return SteamTransport.Connect(steamId);
+
+            var client = new TcpClient();
+            try
             {
                 var connect = client.BeginConnect(host, port, null, null);
                 if (!connect.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(10)))
                     throw new IOException($"Could not reach {host}:{port}. Is the host hosting, and is the port open?");
                 client.EndConnect(connect);
                 client.ReceiveTimeout = 60000;
-
-                using (var stream = new BufferedStream(client.GetStream(), 65536))
-                using (var w = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
-                using (var r = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true))
-                {
-                    w.Write(Protocol.Magic);
-                    w.Write(Protocol.Version);
-                    w.Write(cmd);
-                    if (arg != null)
-                        w.Write(arg);
-                    w.Flush();
-
-                    if (r.ReadByte() != Protocol.StatusOk)
-                        throw new IOException("Host refused: " + r.ReadString());
-                    return readPayload(stream, r);
-                }
+                return new NetworkStream(client.Client, ownsSocket: true);
+            }
+            catch
+            {
+                client.Close();
+                throw;
             }
         }
     }

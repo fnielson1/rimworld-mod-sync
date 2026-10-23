@@ -23,7 +23,7 @@ Anything replaced is backed up first, to `%USERPROFILE%\AppData\LocalLow\Ludeon 
 
 **Keeping Mod Sync itself up to date:** before anything else, the client compares its Mod Sync version with the host's. If the host's is newer, the client asks Steam to update Mod Sync from the Workshop. Once the new version is on disk, **Restart and continue** reloads the game and carries on with the sync. If Steam can't replace the files while the game is running, **Exit so Steam can update** quits the game, and the sync resumes when you next start it. A client that isn't using the Workshop copy (a local copy, or no Steam) is told to update by hand and given the Workshop page.
 
-**With the Multiplayer mod:** nothing to set up. While you host a Multiplayer game, Mod Sync hosts too: on TCP with the same port numbers as Multiplayer's direct address, and on the Mod Sync port. When someone joins with different mods, Mod Sync opens with the server's address filled in and **Restart and rejoin** brings them straight back into the game. This works for direct and LAN joins; joins through Steam aren't supported yet. Both are switched on by default in Options → Mod Settings → Mod Sync.
+**With the Multiplayer mod:** nothing to set up. While you host a Multiplayer game, Mod Sync hosts too: on TCP with the same port numbers as Multiplayer's direct address and on the Mod Sync port, and over Steam when the game accepts Steam joins. When someone joins with different mods, Mod Sync opens with the server's address filled in and **Restart and rejoin** brings them straight back into the game. Joins through Steam sync over Steam itself, so the host needs no open ports for those. Both are switched on by default in Options → Mod Settings → Mod Sync.
 
 **Security:** Workshop mods come from Steam. Mods copied straight from the host (local mods, or Workshop mods when downloading from the host instead of subscribing) can't be verified and could contain anything. They're only installed if you tick **"I trust and know the host personally"**, which is asked fresh for every sync. Without the tick, those mods are skipped and left out of the mod list, and everything else still syncs. The host only serves its active mod folders and their settings files, and the client refuses any file path that escapes the target folder.
 
@@ -52,6 +52,7 @@ The built DLL isn't committed. GitHub Actions builds every push to `main` and ev
 - `Source/SyncServer.cs`: host. Snapshots the mod list, hashes mods, and serves requests over TCP.
 - `Source/SyncJob.cs`: client workflow. Plans the changes, downloads, subscribes, waits for Steam, and writes the mod list.
 - `Source/SyncClient.cs`, `Manifest.cs`: wire protocol (one request per connection, binary).
+- `Source/SteamTransport.cs`: the same requests over Steam peer-to-peer, for Multiplayer games joined through Steam.
 - `Source/ModFolder.cs`: folder hashing and gzip pack/unpack.
 - `Source/Dialog_ModSync.cs`, `ModSyncMod.cs`: UI, settings, main menu button.
 - `Source/MultiplayerCompat.cs`: optional Multiplayer integration, patched by name at runtime so Multiplayer isn't needed to build or run.

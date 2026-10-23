@@ -174,6 +174,18 @@ namespace ModSync
                 : $"Hosting on port {string.Join(", ", open)}: {manifest.Mods.Count} mods, {manifest.Configs.Count} settings files";
             if (open.Count > 0 && failed.Count > 0)
                 status += $" (port {string.Join(", ", failed)} unavailable)";
+            if (SteamTransport.Serving)
+                status += ", and over Steam";
+        }
+
+        /// <summary>Call after something the status mentions changes outside this class.</summary>
+        public static void RefreshStatus()
+        {
+            lock (Lock)
+            {
+                if (manifest != null)
+                    UpdateStatus();
+            }
         }
 
         private class SnapshotEntry
@@ -255,13 +267,21 @@ namespace ModSync
         {
             var remote = client.Client.RemoteEndPoint?.ToString();
             using (client)
-            using (var stream = client.GetStream())
+            {
+                client.ReceiveTimeout = 30000;
+                Serve(client.GetStream(), remote);
+            }
+        }
+
+        /// <summary>Answers one request read from the stream, then closes it. Used for TCP and Steam connections alike.</summary>
+        public static void Serve(Stream stream, string remote)
+        {
+            using (stream)
             using (var r = new BinaryReader(stream, Encoding.UTF8, leaveOpen: true))
             using (var w = new BinaryWriter(new BufferedStream(stream, 65536), Encoding.UTF8))
             {
                 try
                 {
-                    client.ReceiveTimeout = 30000;
                     if (r.ReadUInt32() != Protocol.Magic)
                         return;
                     int version = r.ReadInt32();
@@ -288,6 +308,11 @@ namespace ModSync
                     {
                         m = manifest;
                         folders = servableFolders;
+                    }
+                    if (m == null) // Steam requests can arrive while we're still hashing
+                    {
+                        Error(w, "The host is still preparing its mod list. Try again in a moment.");
+                        return;
                     }
 
                     if (cmd == Protocol.CmdManifest)
