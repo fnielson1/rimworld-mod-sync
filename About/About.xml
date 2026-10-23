@@ -21,9 +21,21 @@
   </loadAfter>
   <description>Sync your active mods, load order and mod settings from a host's game to yours.
 
-The host clicks "Mod Sync" on the main menu and starts hosting. Clients enter the host's address and click Sync: Workshop mods are subscribed through Steam, local mods are downloaded directly from the host, the mod list and mod settings are copied, and the game restarts.
+WITH THE MULTIPLAYER MOD
 
-Works with the Multiplayer mod with no setup: while you host a Multiplayer game, Mod Sync hosts too, and when a player joins with different mods, Mod Sync opens with the server already filled in and rejoins the game after the restart. If the host's mods all come from the Workshop, players joining through Multiplayer don't even need to reach the host's Mod Sync, so no extra ports need opening.
+Host: nothing to do. Host your Multiplayer game as usual; Mod Sync starts hosting with it.
 
-Only sync from hosts you trust - you are downloading and running their mods.</description>
+Players: join the game as usual. If your mods already match the host's, you go straight in and never see Mod Sync. If they don't, Multiplayer reports the mismatch and Mod Sync opens with the server filled in, showing what will change. Click Sync (or "Apply mod list &amp; settings" if nothing needs downloading), wait for it to finish, then click "Restart and rejoin". The game restarts with the host's mods and joins the server again.
+
+If the host's mods all come from the Workshop, this works without reaching the host's Mod Sync, so the host doesn't need to open any extra ports.
+
+WITHOUT MULTIPLAYER
+
+Host: click "Mod Sync" on the main menu, then "Start hosting". Players need your address, plus TCP port 28150 forwarded if they're outside your network.
+
+Players: click "Mod Sync" on the main menu, enter the host's address, click Check to see what would change, then Sync, then "Restart now".
+
+WHAT GETS SYNCED
+
+Missing Workshop mods are subscribed through Steam. The host's load order and mod settings are copied. Mods that only exist on the host's computer are downloaded straight from the host, but only if you tick "I trust and know the host personally": they can contain any code, so only do that for hosts you trust.</description>
 </ModMetaData>
