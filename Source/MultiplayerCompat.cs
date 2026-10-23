@@ -25,6 +25,9 @@ namespace ModSync
 
         private static Type multiplayerType;
 
+        // Multiplayer's data about the server we're syncing from, for handing its mod settings to the restarted game.
+        private static object pendingRemote;
+
         // What we changed when the Multiplayer server started, so stopping it undoes only that.
         private static bool startedServer;
         private static readonly List<int> addedPorts = new List<int>();
@@ -41,6 +44,7 @@ namespace ModSync
                 Log.Warning("[ModSync] Multiplayer is active but its code wasn't found, so Mod Sync won't integrate with it.");
                 return;
             }
+            IgnoreOwnSettings();
             Patch(harmony, "Multiplayer.Client.HostUtil:StartLocalServer", postfix: nameof(ServerStarted));
             Patch(harmony, "Multiplayer.Client.Multiplayer:StopMultiplayer", prefix: nameof(StoppingMultiplayer));
             Patch(harmony, "Multiplayer.Client.JoinDataWindow:PostOpen", postfix: nameof(MismatchWindowOpened));
@@ -59,11 +63,48 @@ namespace ModSync
                 postfix: postfix != null ? new HarmonyMethod(typeof(MultiplayerCompat), postfix) : null);
         }
 
-        /// <summary>Sets the Multiplayer server for the restarted game to join. Null does nothing.</summary>
+        /// <summary>
+        /// Our settings (address, port, ...) belong to each machine, but Multiplayer compares every active mod's
+        /// settings between host and client. Left in, they'd never match and every join would be a mismatch.
+        /// </summary>
+        private static void IgnoreOwnSettings()
+        {
+            var field = AccessTools.Field("Multiplayer.Client.Util.SyncConfigs:ignoredConfigsModIds");
+            if (field == null)
+            {
+                Log.Warning("[ModSync] Couldn't find Multiplayer's ignored settings list; Mod Sync's settings may cause mod mismatches.");
+                return;
+            }
+            var ignored = (string[])field.GetValue(null);
+            var own = ModSyncMod.Instance.Content.ModMetaData.PackageIdNonUnique;
+            if (!ignored.Contains(own))
+                field.SetValue(null, ignored.Append(own).ToArray());
+        }
+
+        /// <summary>
+        /// Sets the Multiplayer server for the restarted game to join. Null does nothing.
+        /// Also hands over the server's mod settings the way Multiplayer's own "Fix and restart" does: Multiplayer
+        /// compares settings Mod Sync doesn't copy (HugsLib's, for one), and uses the server's for the next session.
+        /// </summary>
         public static void RejoinAfterRestart(string connection)
         {
-            if (!connection.NullOrEmpty())
-                Environment.SetEnvironmentVariable(RejoinEnvVar, connection);
+            if (connection.NullOrEmpty())
+                return;
+            Environment.SetEnvironmentVariable(RejoinEnvVar, connection);
+            try
+            {
+                var remote = Traverse.Create(pendingRemote);
+                if (pendingRemote != null && remote.Field("hasConfigs").GetValue<bool>())
+                {
+                    var syncConfigs = AccessTools.TypeByName("Multiplayer.Client.Util.SyncConfigs");
+                    Traverse.Create(syncConfigs).Method("SaveConfigs", remote.Field("remoteModConfigs").GetValue()).GetValue();
+                    Traverse.Create(syncConfigs).Method("MarkApplicableForChildProcess").GetValue();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning("[ModSync] Couldn't hand the server's mod settings to Multiplayer: " + ex);
+            }
         }
 
         // ---------- Host ----------
@@ -138,7 +179,8 @@ namespace ModSync
             {
                 if (!ModSyncMod.Settings.syncOnMultiplayerJoin)
                     return;
-                var connector = Traverse.Create(__instance).Field("remote").Field("connector").GetValue();
+                var remote = Traverse.Create(__instance).Field("remote").GetValue();
+                var connector = Traverse.Create(remote).Field("connector").GetValue();
                 var connection = connector == null ? null : Traverse.Create(connector).Method("GetConnectionString").GetValue<string>();
                 if (connection.NullOrEmpty())
                     return;
@@ -152,6 +194,7 @@ namespace ModSync
 
                 var ports = new[] { port, ModSyncMod.Settings.port }.Distinct().ToArray();
                 var job = new SyncJob(new SyncClient(host, ports), ModSyncMod.Settings.directWorkshop) { Rejoin = connection };
+                pendingRemote = remote;
                 Dialog_ModSync.Open(job);
             }
             catch (Exception ex)
