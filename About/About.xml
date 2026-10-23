@@ -4,7 +4,7 @@
   <author>fnielson</author>
   <packageId>fnielson.modsync</packageId>
   <!-- Bump on every Workshop release: clients compare this against the host's to decide whether to update. -->
-  <modVersion>1.1.0</modVersion>
+  <modVersion>1.2.0</modVersion>
   <supportedVersions>
     <li>1.6</li>
   </supportedVersions>
@@ -23,7 +23,7 @@
 
 The host clicks "Mod Sync" on the main menu and starts hosting. Clients enter the host's address and click Sync: Workshop mods are subscribed through Steam, local mods are downloaded directly from the host, the mod list and mod settings are copied, and the game restarts.
 
-Works with the Multiplayer mod with no setup: while you host a Multiplayer game, Mod Sync hosts too, and when a player joins with different mods, Mod Sync opens with the server already filled in and rejoins the game after the restart.
+Works with the Multiplayer mod with no setup: while you host a Multiplayer game, Mod Sync hosts too, and when a player joins with different mods, Mod Sync opens with the server already filled in and rejoins the game after the restart. If the host's mods all come from the Workshop, players joining through Multiplayer don't even need to reach the host's Mod Sync, so no extra ports need opening.
 
 Only sync from hosts you trust - you are downloading and running their mods.</description>
 </ModMetaData>
